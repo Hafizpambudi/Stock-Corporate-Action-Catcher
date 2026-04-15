@@ -1,5 +1,7 @@
 # Investor Relation Automation System
 
+*Last updated: 2026-04-15T21:48:24+07:00*
+
 An agentic system that automatically monitors Indonesian Stock Exchange (IDX) announcements, parses them, and provides AI-powered financial sentiment analysis.
 
 ## Architecture
@@ -40,6 +42,14 @@ An agentic system that automatically monitors Indonesian Stock Exchange (IDX) an
 ## Setup
 
 ### 1. Install Dependencies
+
+Using uv (recommended):
+
+```bash
+uv sync
+```
+
+Or using pip:
 
 ```bash
 pip install -r requirements.txt
@@ -118,6 +128,7 @@ Investor Relation Automation/
 ├── .env.example
 ├── .gitignore
 ├── main.py                     # Orchestration & scheduling
+├── pyproject.toml              # Project configuration and dependencies
 └── requirements.txt
 ```
 
