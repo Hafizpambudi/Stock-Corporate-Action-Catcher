@@ -29,7 +29,7 @@ Consider these factors:
 Provide a detailed, professional analysis that helps investors understand the implications."""
 
     def __init__(self):
-        self.api_url = f"{OPENROUTER_BASE_URL}/chat/completions"
+        self.api_url = "https://openrouter.ai/api/v1/chat/completions"
         self.headers = {
             "Authorization": f"Bearer {OPENROUTER_API_KEY}",
             "Content-Type": "application/json",

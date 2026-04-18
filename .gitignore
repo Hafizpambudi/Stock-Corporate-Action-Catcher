@@ -18,6 +18,8 @@ ENV/
 # Data output
 data/output/*.pdf
 data/output/*.json
+data/output/raw/
+data/output/_debug/
 
 # IDE
 .vscode/

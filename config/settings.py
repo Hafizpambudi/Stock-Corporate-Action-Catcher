@@ -9,10 +9,13 @@ OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/ap
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.1-70b-instruct")
 
 # IDX Configuration
-IDX_BASE_URL = os.getenv("IDX_BASE_URL", "https://www.idx.co.id/id/perusahaan-tercatat/keterbukaan-informasi")
+IDX_BASE_URL = os.getenv(
+    "IDX_BASE_URL", "https://www.idx.co.id/id/perusahaan-tercatat/keterbukaan-informasi"
+)
 
 # Output Configuration
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "data/output")
+RAW_DIR = os.getenv("RAW_DIR", "data/output/raw")
 
 # Scheduler Configuration
 SCHEDULE_HOUR = int(os.getenv("SCHEDULE_HOUR", "8"))

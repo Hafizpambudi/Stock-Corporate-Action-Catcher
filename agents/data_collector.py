@@ -8,7 +8,7 @@ import fitz  # PyMuPDF
 import httpx
 import urllib.parse
 
-from config.settings import IDX_BASE_URL, OUTPUT_DIR
+from config.settings import IDX_BASE_URL, OUTPUT_DIR, RAW_DIR
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -16,6 +16,14 @@ logger = logging.getLogger(__name__)
 # Debug directory for screenshots and HTML dumps
 DEBUG_DIR = os.path.join(OUTPUT_DIR, "_debug")
 os.makedirs(DEBUG_DIR, exist_ok=True)
+
+
+# Raw PDF storage directory - created dynamically per run
+def get_raw_pdf_dir() -> str:
+    """Create and return the raw PDF directory for today."""
+    raw_dir = os.path.join(RAW_DIR, datetime.now().strftime("%Y-%m-%d"))
+    os.makedirs(raw_dir, exist_ok=True)
+    return raw_dir
 
 
 class DataCollectorAgent:
@@ -108,23 +116,96 @@ class DataCollectorAgent:
                 announcements = await self._collect_todays_announcements(page)
                 logger.info(f"Found {len(announcements)} announcements for today")
 
-                # Parse PDFs - simple approach without complex navigation
+                # Parse PDFs and save to raw directory using httpx with browser cookies
                 parsed_data = []
+
+                # Get browser cookies for authenticated PDF downloads
+                browser_context = page.context
+                cookies = await browser_context.cookies()
+                cookie_dict = {c["name"]: c["value"] for c in cookies}
+
+                # Get origin URL for referer
+                origin_url = page.url
+
+                logger.info(f"Got {len(cookie_dict)} cookies from browser session")
+                logger.info(f"Cookie names: {list(cookie_dict.keys())}")
+
+                # Create raw PDF directory for today
+                raw_pdf_dir = get_raw_pdf_dir()
+
+                # Process each announcement
                 for ann in announcements:
                     try:
-                        logger.info(
-                            f"Processing: {ann['title'][:50]} - {ann['pdf_url']}"
+                        logger.info(f"Processing: {ann['title'][:50]}")
+
+                        content = ""
+                        pdf_saved = False
+                        pdf_path = None
+
+                        # Download PDF using httpx with browser cookies and proper headers
+                        pdf_url = ann["pdf_url"]
+                        success, pdf_data = await self._download_pdf_with_cookies(
+                            pdf_url, cookie_dict, origin_url
                         )
-                        # For now, just pass the announcement with empty content
-                        # The PDF download protection is too complex to bypass without proper auth
+
+                        if success and pdf_data and len(pdf_data) > 100:
+                            # Save as .txt with safe filename
+                            safe_title = "".join(
+                                c for c in ann["title"] if c.isalnum() or c in " -_"
+                            ).strip()[:50]
+                            txt_filename = (
+                                f"{ann['ticker']}_{ann['date']}_{safe_title}.txt"
+                            )
+                            txt_path = os.path.join(raw_pdf_dir, txt_filename)
+
+                            # Extract text from PDF
+                            import fitz
+                            import io
+
+                            pdf_buffer = io.BytesIO(pdf_data)
+                            doc = fitz.open(stream=pdf_buffer, filetype="pdf")
+                            content = ""
+                            for page in doc:
+                                content += page.get_text()
+                            doc.close()
+
+                            # Save as .txt
+                            with open(txt_path, "w", encoding="utf-8") as f:
+                                f.write(content)
+                            pdf_saved = True
+                            logger.info(
+                                f"Saved TXT: {txt_filename} ({len(content)} chars)"
+                            )
+                        else:
+                            logger.warning(
+                                f"Failed to download PDF: {ann['pdf_url'][-50:]}"
+                            )
+
+                        ann["content"] = (
+                            content
+                            if content
+                            else f"Title: {ann['title']}\nTicker: {ann['ticker']}\nDate: {ann['date']}"
+                        )
+                        ann["pdf_saved"] = pdf_saved
+                        ann["pdf_path"] = txt_path if pdf_saved else None
+
+                        parsed_data.append(ann)
+                        logger.info(f"Added: {ann['ticker']}")
+
+                        # Brief delay to avoid rate limiting
+                        await asyncio.sleep(0.5)
+
+                    except Exception as e:
+                        logger.error(f"Error processing {ann['title'][:30]}: {e}")
                         ann["content"] = (
                             f"Title: {ann['title']}\nTicker: {ann['ticker']}\nDate: {ann['date']}"
                         )
+                        ann["pdf_saved"] = False
                         parsed_data.append(ann)
-                        logger.info(f"Added: {ann['ticker']}")
-                    except Exception as e:
-                        logger.error(f"Error: {e}")
                         continue
+
+                saved_count = len([a for a in parsed_data if a.get("pdf_saved")])
+                logger.info(f"Saved {saved_count} TXT files to {raw_pdf_dir}")
 
                 return parsed_data
 
@@ -490,3 +571,62 @@ class DataCollectorAgent:
 
         # Fallback: use first few characters or full text
         return company_text.strip()[:10]
+
+    async def _download_pdf_with_cookies(
+        self, pdf_url: str, cookies: dict, origin_url: str
+    ) -> tuple[bool, bytes]:
+        """Download PDF using httpx with browser cookies and proper headers."""
+        try:
+            # Prepare headers to mimic browser request
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                "Accept": "application/pdf,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9,id;q=0.8",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Referer": origin_url,
+                "Origin": "https://www.idx.co.id",
+            }
+
+            async with httpx.AsyncClient(
+                cookies=cookies,
+                headers=headers,
+                follow_redirects=True,
+                timeout=30.0,
+            ) as client:
+                # First try with cookies
+                response = await client.get(pdf_url)
+
+                if response.status_code == 200 and b"%PDF" in response.content[:100]:
+                    return True, response.content
+
+                # If 403, try without auth cookies but with proper headers
+                if response.status_code == 403:
+                    logger.info(f"Got 403, retrying without auth cookies...")
+
+                    # Simple headers without cookies
+                    simple_headers = {
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                        "Accept": "application/pdf,*/*",
+                        "Referer": "https://www.idx.co.id/",
+                    }
+
+                    async with httpx.AsyncClient(
+                        headers=simple_headers,
+                        follow_redirects=True,
+                        timeout=30.0,
+                    ) as simple_client:
+                        response = await simple_client.get(pdf_url)
+                        if response.status_code == 200:
+                            return True, response.content
+
+                logger.warning(
+                    f"PDF download failed: {response.status_code} for {pdf_url[-40:]}"
+                )
+                return False, b""
+
+        except httpx.TimeoutException:
+            logger.warning(f"Timeout downloading PDF: {pdf_url[-40:]}")
+            return False, b""
+        except Exception as e:
+            logger.warning(f"Error downloading PDF: {e}")
+            return False, b""
