@@ -106,8 +106,15 @@ Provide a detailed, professional analysis that helps investors understand the im
                 # Track successful request
                 self._track_request()
 
+                # Extract ticker from analysis if original is UNKNOWN
+                extracted_ticker = announcement_data["ticker"]
+                if extracted_ticker == "UNKNOWN":
+                    extracted_ticker = self._extract_ticker_from_analysis(
+                        analysis_text, announcement_data.get("title", "")
+                    )
+
                 return {
-                    "Ticker": announcement_data["ticker"],
+                    "Ticker": extracted_ticker,
                     "analysis": analysis_text,
                     "source": announcement_data["pdf_url"],
                 }
@@ -181,6 +188,65 @@ Provide a detailed, professional analysis that helps investors understand the im
         """Track a successful request for rate limiting."""
         self._request_times.append(time.time())
         self._daily_request_count += 1
+
+    def _extract_ticker_from_analysis(self, analysis_text: str, title: str) -> str:
+        """Extract ticker from analysis text or title when original is UNKNOWN."""
+        import re
+
+        combined = f"{title} {analysis_text}"
+
+        # Look for patterns like (TICKER) or code at start of line
+        patterns = [
+            r"\b([A-Z]{4})\b",  # 4-letter stock codes
+            r"\b([A-Z]{3})\b",  # 3-letter stock codes
+            r"code[:\s]+([A-Z]{3,4})",  # "code: XYZ"
+            r"ticker[:\s]+([A-Z]{3,4})",  # "ticker: XYZ"
+            r"PT\s+([A-Z][a-zA-Z]+\s+Tbk)",  # PT Name Tbk
+        ]
+
+        # Common Indonesian stock patterns
+        common_tickers = [
+            "GRPM",
+            "PMUI",
+            "MDRN",
+            "KREN",
+            "FAST",
+            "KOTA",
+            "ADRO",
+            "KBAG",
+            "BBCA",
+            "BBRI",
+            "BMRI",
+            "TLKM",
+            "ASII",
+            "UNVR",
+            "HMSP",
+            "PGNO",
+            "INKP",
+            "SMGR",
+            "PATY",
+            "ACES",
+            "PLNN",
+            "MITI",
+            "LPKR",
+            "BNLI",
+        ]
+
+        for pattern in patterns:
+            matches = re.findall(pattern, combined)
+            for match in matches:
+                if match in common_tickers:
+                    logger.info(f"Extracted ticker: {match} from analysis")
+                    return match
+
+        # Try to find PT Name Tbk pattern
+        pt_match = re.search(r"PT\s+([A-Za-z]+)\s+Tbk", combined)
+        if pt_match:
+            name = pt_match.group(1).upper()[:4]
+            logger.info(f"Extracted ticker: {name} from PT name")
+            return name
+
+        return "UNKNOWN"
 
     def analyze_batch(self, announcements: list[dict]) -> list[dict]:
         """Analyze multiple announcements with rate limiting."""
