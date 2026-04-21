@@ -165,6 +165,11 @@ async def run(self) -> list[dict]:
 - Never hardcode credentials or URLs
 - Use `os.getenv()` with sensible defaults
 
+### Comments
+
+- **DO NOT add any comments** in generated code unless explicitly requested by the user
+- Code should be self-explanatory through clear naming and structure
+
 ---
 
 ## Project Structure

@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IDX News Terminal</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Playfair+Display:wght@400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0a0a0b;
+            --bg-secondary: #121214;
+            --bg-tertiary: #1a1a1d;
+            --bg-card: #161618;
+            --text-primary: #f4f4f5;
+            --text-secondary: #a1a1aa;
+            --text-muted: #52525b;
+            --accent-gold: #d4a853;
+            --accent-gold-dim: #8b7355;
+            --accent-green: #22c55e;
+            --accent-red: #ef4444;
+            --accent-blue: #3b82f6;
+            --border-subtle: #27272a;
+            --border-gold: #d4a85333;
+            --font-display: 'Playfair Display', serif;
+            --font-mono: 'DM Mono', monospace;
+            --font-data: 'JetBrains Mono', monospace;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: var(--font-mono);
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+
+        /* Texture overlay */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+            opacity: 0.03;
+            pointer-events: none;
+            z-index: 1000;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        /* Header */
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            padding-bottom: 2rem;
+            border-bottom: 1px solid var(--border-subtle);
+            margin-bottom: 2rem;
+            animation: fadeSlideDown 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+            opacity: 0;
+            transform: translateY(-10px);
+        }
+
+        @keyframes fadeSlideDown {
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .brand {
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+
+        .brand h1 {
+            font-family: var(--font-display);
+            font-size: 2.5rem;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+            background: linear-gradient(135deg, var(--text-primary) 0%, var(--accent-gold) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .brand .subtitle {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.15em;
+        }
+
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+        }
+
+        .status-dot {
+            width: 6px;
+            height: 6px;
+            background: var(--accent-green);
+            border-radius: 50%;
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        /* Date Selector */
+        .date-selector {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 2rem;
+            animation: fadeSlideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) 0.1s forwards;
+            opacity: 0;
+            transform: translateY(10px);
+        }
+
+        @keyframes fadeSlideUp {
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .date-selector label {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+
+        .date-input {
+            font-family: var(--font-mono);
+            font-size: 0.875rem;
+            padding: 0.75rem 1rem;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-subtle);
+            color: var(--text-primary);
+            border-radius: 4px;
+            outline: none;
+            transition: all 0.2s ease;
+            cursor: pointer;
+        }
+
+        .date-input:focus {
+            border-color: var(--accent-gold);
+            box-shadow: 0 0 0 3px var(--border-gold);
+        }
+
+        .date-btn {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            padding: 0.75rem 1.5rem;
+            background: var(--accent-gold);
+            color: var(--bg-primary);
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            transition: all 0.2s ease;
+        }
+
+        .date-btn:hover {
+            background: #e5b964;
+            transform: translateY(-1px);
+        }
+
+        .date-quick {
+            display: flex;
+            gap: 0.5rem;
+            margin-left: auto;
+        }
+
+        .date-quick button {
+            font-family: var(--font-mono);
+            font-size: 0.7rem;
+            padding: 0.5rem 0.75rem;
+            background: transparent;
+            border: 1px solid var(--border-subtle);
+            color: var(--text-secondary);
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .date-quick button:hover,
+        .date-quick button.active {
+            border-color: var(--accent-gold);
+            color: var(--accent-gold);
+        }
+
+        /* Stats Bar */
+        .stats-bar {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1px;
+            background: var(--border-subtle);
+            margin-bottom: 2rem;
+            animation: fadeSlideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) 0.2s forwards;
+            opacity: 0;
+            transform: translateY(10px);
+        }
+
+        @keyframes fadeSlideUp {
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .stat-card {
+            background: var(--bg-secondary);
+            padding: 1.25rem;
+        }
+
+        .stat-card .label {
+            font-size: 0.65rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-card .value {
+            font-family: var(--font-data);
+            font-size: 1.5rem;
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+
+        .stat-card .value.positive { color: var(--accent-green); }
+        .stat-card .value.negative { color: var(--accent-red); }
+        .stat-card .value.neutral { color: var(--accent-blue); }
+        .stat-card .value.unknown { color: var(--text-muted); }
+
+        /* News Grid */
+        .news-grid {
+            display: grid;
+            gap: 1rem;
+        }
+
+        .news-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: 6px;
+            padding: 1.5rem;
+            transition: all 0.3s ease;
+            animation: cardReveal 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+            opacity: 0;
+            transform: translateY(20px);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .news-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 3px;
+            height: 100%;
+            background: var(--text-muted);
+            transition: background 0.3s ease;
+        }
+
+        .news-card.positive::before { background: var(--accent-green); }
+        .news-card.negative::before { background: var(--accent-red); }
+        .news-card.neutral::before { background: var(--accent-blue); }
+
+        @keyframes cardReveal {
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .news-card:hover {
+            border-color: var(--border-gold);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+        }
+
+        .news-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 1rem;
+        }
+
+        .ticker {
+            font-family: var(--font-data);
+            font-size: 1rem;
+            font-weight: 500;
+            color: var(--accent-gold);
+            letter-spacing: 0.05em;
+        }
+
+        .sentiment-badge {
+            font-size: 0.65rem;
+            padding: 0.25rem 0.75rem;
+            border-radius: 2px;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            font-weight: 500;
+        }
+
+        .sentiment-badge.positive {
+            background: rgba(34, 197, 94, 0.15);
+            color: var(--accent-green);
+        }
+        .sentiment-badge.negative {
+            background: rgba(239, 68, 68, 0.15);
+            color: var(--accent-red);
+        }
+        .sentiment-badge.neutral {
+            background: rgba(59, 130, 246, 0.15);
+            color: var(--accent-blue);
+        }
+        .sentiment-badge.unknown {
+            background: rgba(82, 82, 91, 0.15);
+            color: var(--text-muted);
+        }
+
+        .news-source {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            margin-bottom: 0.75rem;
+            word-break: break-all;
+        }
+
+        .news-source a {
+            color: var(--accent-gold-dim);
+            text-decoration: none;
+        }
+
+        .news-source a:hover {
+            color: var(--accent-gold);
+            text-decoration: underline;
+        }
+
+        .news-analysis {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            line-height: 1.7;
+            max-height: 150px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .news-analysis::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            height: 60px;
+            background: linear-gradient(transparent, var(--bg-card));
+        }
+
+        /* Empty State */
+        .empty-state {
+            text-align: center;
+            padding: 4rem 2rem;
+            color: var(--text-muted);
+        }
+
+        .empty-state h3 {
+            font-family: var(--font-display);
+            font-size: 1.5rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.5rem;
+        }
+
+        .loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            padding: 3rem;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+
+        .spinner {
+            width: 16px;
+            height: 16px;
+            border: 2px solid var(--border-subtle);
+            border-top-color: var(--accent-gold);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Footer */
+        footer {
+            margin-top: 3rem;
+            padding-top: 1.5rem;
+            border-top: 1px solid var(--border-subtle);
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.7rem;
+            color: var(--text-muted);
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .container { padding: 1rem; }
+            header { flex-direction: column; gap: 1rem; align-items: flex-start; }
+            .brand h1 { font-size: 1.75rem; }
+            .date-selector { flex-direction: column; align-items: flex-start; }
+            .date-quick { margin-left: 0; margin-top: 0.5rem; }
+            .stats-bar { grid-template-columns: repeat(2, 1fr); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="brand">
+                <h1>IDX News Terminal</h1>
+                <span class="subtitle">Indonesia Stock Exchange Announcements</span>
+            </div>
+            <div class="status">
+                <span class="status-dot"></span>
+                <span>Live Connection</span>
+            </div>
+        </header>
+
+        <div class="date-selector">
+            <label>Select Date</label>
+            <input type="date" id="dateInput" class="date-input" value="2026-04-21">
+            <button class="date-btn" onclick="fetchNews()">Fetch</button>
+            <div class="date-quick" id="dateQuick"></div>
+        </div>
+
+        <div class="stats-bar" id="statsBar">
+            <div class="stat-card">
+                <div class="label">Total News</div>
+                <div class="value" id="totalCount">—</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Positive</div>
+                <div class="value positive" id="positiveCount">—</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Neutral</div>
+                <div class="value neutral" id="neutralCount">—</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Negative</div>
+                <div class="value negative" id="negativeCount">—</div>
+            </div>
+        </div>
+
+        <div class="news-grid" id="newsGrid">
+            <div class="loading">
+                <div class="spinner"></div>
+                <span>Loading announcements...</span>
+            </div>
+        </div>
+
+        <footer>
+            <span id="footerDate">—</span>
+            <span>IDX News Terminal v1.0</span>
+        </footer>
+    </div>
+
+    <script>
+        let availableDates = [];
+
+        async function init() {
+            try {
+                const res = await fetch('/api/dates');
+                availableDates = await res.json();
+                
+                if (availableDates.length > 0) {
+                    document.getElementById('dateInput').value = availableDates[0];
+                    setupQuickDates();
+                }
+                
+                await fetchNews();
+            } catch (e) {
+                console.error('Init error:', e);
+                showEmpty('Failed to connect to database');
+            }
+        }
+
+        function setupQuickDates() {
+            const container = document.getElementById('dateQuick');
+            container.innerHTML = '';
+            
+            availableDates.slice(0, 5).forEach(date => {
+                const btn = document.createElement('button');
+                btn.textContent = date.slice(5);
+                btn.onclick = () => {
+                    document.getElementById('dateInput').value = date;
+                    fetchNews();
+                };
+                if (date === document.getElementById('dateInput').value) {
+                    btn.classList.add('active');
+                }
+                container.appendChild(btn);
+            });
+        }
+
+        async function fetchNews() {
+            const date = document.getElementById('dateInput').value;
+            const grid = document.getElementById('newsGrid');
+            
+            grid.innerHTML = '<div class="loading"><div class="spinner"></div><span>Loading announcements...</span></div>';
+            
+            try {
+                const res = await fetch(`/api/news/${date}`);
+                const news = await res.json();
+                
+                if (news.length === 0) {
+                    showEmpty('No announcements found for this date');
+                    updateStats({ positive: 0, neutral: 0, negative: 0, unknown: 0, total: 0 });
+                    return;
+                }
+                
+                renderNews(news);
+            } catch (e) {
+                console.error('Fetch error:', e);
+                showEmpty('Failed to fetch announcements');
+            }
+        }
+
+        function renderNews(news) {
+            const grid = document.getElementById('newsGrid');
+            grid.innerHTML = '';
+            
+            const stats = { positive: 0, neutral: 0, negative: 0, unknown: 0, total: news.length };
+            
+            news.forEach((item, i) => {
+                const sentiment = detectSentiment(item.analysis);
+                stats[sentiment]++;
+                
+                const card = document.createElement('div');
+                card.className = `news-card ${sentiment}`;
+                card.style.animationDelay = `${i * 0.05}s`;
+                
+                card.innerHTML = `
+                    <div class="news-header">
+                        <span class="ticker">${item.Ticker || 'UNKNOWN'}</span>
+                        <span class="sentiment-badge ${sentiment}">${getSentimentLabel(sentiment)}</span>
+                    </div>
+                    <div class="news-source">Source: <a href="${item.source}" target="_blank">${item.source?.slice(0, 70)}...</a></div>
+                    <div class="news-analysis">${item.analysis}</div>
+                `;
+                
+                grid.appendChild(card);
+            });
+            
+            updateStats(stats);
+            document.getElementById('footerDate').textContent = `Data: ${document.getElementById('dateInput').value}`;
+        }
+
+        function detectSentiment(text) {
+            if (!text) return 'unknown';
+            const t = text.toLowerCase();
+            if (t.includes('positive') || t.includes('bullish') || t.includes('growth') || t.includes('increase')) return 'positive';
+            if (t.includes('negative') || t.includes('bearish') || t.includes('decline') || t.includes('loss')) return 'negative';
+            return 'neutral';
+        }
+
+        function getSentimentLabel(sentiment) {
+            const labels = { positive: 'Positive', negative: 'Negative', neutral: 'Neutral', unknown: 'Unknown' };
+            return labels[sentiment] || 'Unknown';
+        }
+
+        function updateStats(stats) {
+            document.getElementById('totalCount').textContent = stats.total;
+            document.getElementById('positiveCount').textContent = stats.positive;
+            document.getElementById('neutralCount').textContent = stats.neutral;
+            document.getElementById('negativeCount').textContent = stats.negative;
+        }
+
+        function showEmpty(message) {
+            document.getElementById('newsGrid').innerHTML = `
+                <div class="empty-state">
+                    <h3>${message}</h3>
+                    <p>Select a different date or check back later</p>
+                </div>
+            `;
+            updateStats({ positive: 0, neutral: 0, negative: 0, unknown: 0, total: 0 });
+        }
+
+        // Initialize
+        init();
+
+        // Enter key to search
+        document.getElementById('dateInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') fetchNews();
+        });
+    </script>
+</body>
+</html>

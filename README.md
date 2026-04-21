@@ -98,6 +98,30 @@ python main.py --schedule
 
 Default schedule: Monday-Friday at 08:00
 
+## Viewing the Dashboard
+
+After running the analysis, you can view the results in the web dashboard:
+
+### Option 1: Python HTTP Server (Recommended)
+
+From the project root, serve the `frontend` directory:
+
+```bash
+cd frontend && python -m http.server 8080
+```
+
+Then open `http://localhost:8080` in your browser.
+
+### Option 2: Direct File Access
+
+Open `frontend/index.html` directly in your browser. The dashboard will attempt to fetch the latest results JSON from `../data/output/results_YYYY-MM-DD.json`.
+
+### Option 3: Any Static Server
+
+You can use any static file server (VS Code Live Server, nginx, etc.) pointing to the `frontend/` directory.
+
+**Note**: The dashboard loads the results file for today's date automatically. Ensure the JSON file exists in `data/output/` before opening the dashboard.
+
 ## Output Format
 
 Results are saved to `data/output/results_YYYY-MM-DD.json`:
@@ -125,6 +149,8 @@ Investor Relation Automation/
 │   └── settings.py             # Configuration management
 ├── data/
 │   └── output/                 # Generated reports
+├── frontend/
+│   └── index.html              # Dashboard UI
 ├── .env.example
 ├── .gitignore
 ├── main.py                     # Orchestration & scheduling
