@@ -722,7 +722,7 @@
                         <span class="sentiment-badge ${sentiment}">${getSentimentLabel(sentiment)}</span>
                     </div>
                     <div class="news-source">Source: <a href="${item.source}" target="_blank" onclick="event.stopPropagation()">${item.source?.slice(0, 70)}...</a></div>
-                    <div class="news-analysis">${item.analysis}</div>
+                    <div class="news-analysis">${item.analysis ? marked.parse(item.analysis) : ''}</div>
                 `;
                 
                 grid.appendChild(card);
