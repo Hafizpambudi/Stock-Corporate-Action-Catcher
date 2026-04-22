@@ -74,6 +74,11 @@ Edit `.env`:
 OPENROUTER_API_KEY=your_api_key_here
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 OPENROUTER_MODEL=meta-llama/llama-3.1-70b-instruct
+
+MONGO_URI=mongodb+srv://your_mongo_connection_string
+OUTPUT_DIR=data/output
+SCHEDULE_HOUR=8
+SCHEDULE_MINUTE=0
 ```
 
 ### 4. Create Output Directory
@@ -98,29 +103,64 @@ python main.py --schedule
 
 Default schedule: Monday-Friday at 08:00
 
-## Viewing the Dashboard
+## MongoDB Data Storage
 
-After running the analysis, you can view the results in the web dashboard:
+### Automatic Ingestion
 
-### Option 1: Python HTTP Server (Recommended)
+The system automatically ingests collected data into MongoDB when `MONGO_URI` is configured in your `.env` file. This happens automatically after data collection.
 
-From the project root, serve the `frontend` directory:
-
+To check if ingestion is working:
 ```bash
-cd frontend && python -m http.server 8080
+python scripts/ingest_to_mongodb.py
 ```
 
-Then open `http://localhost:8080` in your browser.
+This script can still be used manually to:
+- Find all `data/output/results_*.json` files
+- Add `pull_date` field to each document (extracted from filename)
+- Insert all data into MongoDB collection `Daily_News`
 
-### Option 2: Direct File Access
+## Running the System
 
-Open `frontend/index.html` directly in your browser. The dashboard will attempt to fetch the latest results JSON from `../data/output/results_YYYY-MM-DD.json`.
+### 1. Run the IDX Data Collection (Daily)
 
-### Option 3: Any Static Server
+```bash
+python main.py --run-now
+```
 
-You can use any static file server (VS Code Live Server, nginx, etc.) pointing to the `frontend/` directory.
+### 2. Ingest Results to MongoDB
 
-**Note**: The dashboard loads the results file for today's date automatically. Ensure the JSON file exists in `data/output/` before opening the dashboard.
+```bash
+python scripts/ingest_to_mongodb.py
+```
+
+### 3. Start the Dashboard Server
+
+```bash
+python -m uvicorn backend.app:app --reload --port 5000
+```
+
+Then open **http://localhost:5000** in your browser.
+
+## Dashboard
+
+The dashboard provides a web interface to query and view IDX announcements by date.
+
+**Features:**
+- Date selector with quick access buttons
+- Stats bar showing positive/neutral/negative sentiment counts
+- Expandable news cards with source links
+- Live MongoDB connection
+
+**Quick Start (all in one):**
+
+```bash
+# Terminal 1: Collect and ingest
+python main.py --run-now
+python scripts/ingest_to_mongodb.py
+
+# Terminal 2: Start dashboard
+python -m uvicorn backend.app:app --reload --port 5000
+```
 
 ## Output Format
 
@@ -143,19 +183,23 @@ Investor Relation Automation/
 ├── agents/
 │   ├── __init__.py
 │   ├── data_collector.py       # Web scraping & PDF parsing
-│   └── financial_expert.py     # LLM-based analysis
+│   └── financial_expert.py       # LLM-based analysis
+├── backend/
+│   └── app.py                  # FastAPI server
 ├── config/
 │   ├── __init__.py
-│   └── settings.py             # Configuration management
+│   └── settings.py              # Configuration management
 ├── data/
-│   └── output/                 # Generated reports
+│   └── output/                  # Generated reports
 ├── frontend/
-│   └── index.html              # Dashboard UI
-├── .env.example
-├── .gitignore
-├── main.py                     # Orchestration & scheduling
-├── pyproject.toml              # Project configuration and dependencies
-└── requirements.txt
+│   └── templates/
+│       └── index.html          # Dashboard UI
+├── scripts/
+│   ├── ingest_to_mongodb.py     # MongoDB ingestion script
+│   └── check_mongodb.py         # Debug script
+├── main.py                      # Orchestration & scheduling
+├── pyproject.toml              # Project configuration
+└── .env                       # Environment variables
 ```
 
 ## Configuration
@@ -166,6 +210,7 @@ Edit `config/settings.py` or `.env` to customize:
 - **IDX_BASE_URL**: Change if IDX updates their URL structure
 - **OUTPUT_DIR**: Custom output directory
 - **SCHEDULE_HOUR/SCHEDULE_MINUTE**: Adjust run time
+- **MONGO_URI**: MongoDB Atlas connection string
 
 ## Important Notes
 
@@ -195,11 +240,10 @@ Use browser dev tools to inspect the actual page structure and adjust accordingl
 
 - [ ] Add notification system (email/Telegram) for high-impact announcements
 - [ ] Implement caching to avoid re-processing same announcements
-- [ ] Add database storage for historical analysis
 - [ ] Support for multiple stock exchanges
-- [ ] Web dashboard for viewing results
 - [ ] Improved ticker extraction with validation
 - [ ] Handle pagination on IDX website
+- [ ] Add search/filter by ticker or sentiment
 
 ## License
 

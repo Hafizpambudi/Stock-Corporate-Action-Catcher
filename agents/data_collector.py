@@ -7,11 +7,29 @@ from playwright_stealth import stealth as stealth_module
 import fitz  # PyMuPDF
 import httpx
 import urllib.parse
+from typing import Optional
 
-from config.settings import IDX_BASE_URL, OUTPUT_DIR, RAW_DIR
+from config.settings import IDX_BASE_URL, OUTPUT_DIR, RAW_DIR, MONGO_URI
+
+try:
+    from pymongo import MongoClient
+
+    MONGO_AVAILABLE = True
+except ImportError:
+    MONGO_AVAILABLE = False
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Log MongoDB configuration status on module load
+if MONGO_URI:
+    logger.info(f"MongoDB configured: URI present ({len(MONGO_URI)} chars)")
+    if MONGO_AVAILABLE:
+        logger.info("MongoDB: pymongo available - auto-ingestion enabled")
+    else:
+        logger.warning("MongoDB: pymongo NOT installed - auto-ingestion disabled")
+else:
+    logger.info("MongoDB: MONGO_URI not set - auto-ingestion disabled")
 
 # Debug directory for screenshots and HTML dumps
 DEBUG_DIR = os.path.join(OUTPUT_DIR, "_debug")
@@ -206,6 +224,38 @@ class DataCollectorAgent:
 
                 saved_count = len([a for a in parsed_data if a.get("pdf_saved")])
                 logger.info(f"Saved {saved_count} TXT files to {raw_pdf_dir}")
+
+                # Ingest to MongoDB if configured
+                if MONGO_AVAILABLE and MONGO_URI:
+                    try:
+                        logger.info(
+                            f"Attempting MongoDB ingestion: {len(parsed_data)} documents"
+                        )
+                        client = MongoClient(
+                            MONGO_URI,
+                            connect=False,  # Don't connect immediately
+                            maxPoolSize=1,
+                            connectTimeoutMS=30000,
+                            socketTimeoutMS=30000,
+                            retryWrites=True,
+                            serverSelectionTimeoutMS=30000,
+                        )
+                        db = client["idx_news"]
+                        collection = db["Daily_News"]
+                        if parsed_data:
+                            result = collection.insert_many(parsed_data)
+                            logger.info(
+                                f"✓ Inserted {len(result.inserted_ids)} docs into MongoDB (db: idx_news, collection: Daily_News)"
+                            )
+                        else:
+                            logger.warning("No data to ingest")
+                        client.close()
+                    except Exception as db_err:
+                        logger.error(f"MongoDB ingestion failed: {db_err}")
+                elif MONGO_URI and not MONGO_AVAILABLE:
+                    logger.warning("MongoDB ingestion skipped: pymongo not installed")
+                elif not MONGO_URI:
+                    logger.info("MongoDB ingestion skipped: MONGO_URI not configured")
 
                 return parsed_data
 

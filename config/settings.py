@@ -1,7 +1,11 @@
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load .env from project root (optional - won't fail if missing)
+env_path = Path(__file__).parent.parent / ".env"
+if env_path.exists():
+    load_dotenv(env_path)
 
 # OpenRouter Configuration
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
@@ -20,3 +24,6 @@ RAW_DIR = os.getenv("RAW_DIR", "data/output/raw")
 # Scheduler Configuration
 SCHEDULE_HOUR = int(os.getenv("SCHEDULE_HOUR", "8"))
 SCHEDULE_MINUTE = int(os.getenv("SCHEDULE_MINUTE", "0"))
+
+# MongoDB Configuration
+MONGO_URI = os.getenv("MONGO_URI")

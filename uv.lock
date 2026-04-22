@@ -263,7 +263,7 @@ requires-dist = [
     { name = "httpx", specifier = "==0.27.0" },
     { name = "playwright", specifier = "==1.41.2" },
     { name = "playwright-stealth", specifier = ">=2.0.3" },
-    { name = "pymongo", specifier = ">=4.17.0" },
+    { name = "pymongo", extras = ["srv"], specifier = ">=4.17.0" },
     { name = "pymupdf", specifier = "==1.23.8" },
     { name = "python-dotenv", specifier = "==1.0.1" },
     { name = "requests", specifier = "==2.31.0" },

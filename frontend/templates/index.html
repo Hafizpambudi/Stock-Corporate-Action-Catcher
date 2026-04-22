@@ -7,6 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Playfair+Display:wght@400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
         :root {
             --bg-primary: #0a0a0b;
@@ -264,6 +265,7 @@
             gap: 1rem;
         }
 
+        /* News Card Click */
         .news-card {
             background: var(--bg-card);
             border: 1px solid var(--border-subtle);
@@ -275,6 +277,7 @@
             transform: translateY(20px);
             position: relative;
             overflow: hidden;
+            cursor: pointer;
         }
 
         .news-card::before {
@@ -439,6 +442,135 @@
             .date-quick { margin-left: 0; margin-top: 0.5rem; }
             .stats-bar { grid-template-columns: repeat(2, 1fr); }
         }
+
+        /* Modal */
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.85);
+            backdrop-filter: blur(8px);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem;
+            z-index: 1000;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal {
+            background: var(--bg-secondary);
+            border: 1px solid var(--accent-gold);
+            border-radius: 8px;
+            max-width: 800px;
+            width: 100%;
+            max-height: 85vh;
+            overflow-y: auto;
+            padding: 2rem;
+            box-shadow: 0 0 60px rgba(212, 168, 83, 0.15);
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border-subtle);
+        }
+
+        .modal-ticker {
+            font-family: var(--font-data);
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: var(--accent-gold);
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            font-size: 1.5rem;
+            cursor: pointer;
+            padding: 0.25rem 0.5rem;
+            transition: color 0.15s;
+            font-family: 'Inter', sans-serif;
+            line-height: 1;
+        }
+
+        .modal-close:hover {
+            color: var(--text-primary);
+        }
+
+        .modal-meta {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+            margin-bottom: 1.5rem;
+            flex-wrap: wrap;
+        }
+
+        .modal-source-link {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        .modal-source-link a {
+            color: var(--accent-gold);
+            text-decoration: none;
+        }
+
+        .modal-source-link a:hover {
+            text-decoration: underline;
+        }
+
+        .modal-analysis {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            line-height: 1.8;
+        }
+
+        .modal-analysis h1, .modal-analysis h2, .modal-analysis h3 {
+            font-family: var(--font-mono);
+            font-weight: 600;
+            color: var(--text-primary);
+            margin: 1.25rem 0 0.5rem;
+        }
+
+        .modal-analysis h2 { font-size: 1rem; }
+        .modal-analysis h3 { font-size: 0.9rem; }
+
+        .modal-analysis p {
+            margin-bottom: 0.75rem;
+        }
+
+        .modal-analysis ul, .modal-analysis ol {
+            margin: 0.5rem 0 0.75rem 1.25rem;
+        }
+
+        .modal-analysis li {
+            margin-bottom: 0.25rem;
+        }
+
+        .modal-analysis strong {
+            color: var(--text-primary);
+            font-weight: 600;
+        }
+
+        .modal-analysis em {
+            color: var(--accent-gold);
+            font-style: italic;
+        }
+
+        .modal-analysis code {
+            background: var(--bg-primary);
+            padding: 0.15rem 0.3rem;
+            border-radius: 2px;
+            font-family: var(--font-data);
+            font-size: 0.8rem;
+        }
     </style>
 </head>
 <body>
@@ -491,6 +623,21 @@
             <span id="footerDate">—</span>
             <span>IDX News Terminal v1.0</span>
         </footer>
+    </div>
+
+    <!-- Modal -->
+    <div class="modal-overlay" id="modalOverlay">
+        <div class="modal">
+            <div class="modal-header">
+                <span class="modal-ticker" id="modalTicker"></span>
+                <button class="modal-close" id="modalClose">&times;</button>
+            </div>
+            <div class="modal-meta">
+                <span class="sentiment-badge" id="modalSentiment"></span>
+                <span class="modal-source-link" id="modalSource"></span>
+            </div>
+            <div class="modal-analysis" id="modalAnalysis"></div>
+        </div>
     </div>
 
     <script>
@@ -567,13 +714,14 @@
                 const card = document.createElement('div');
                 card.className = `news-card ${sentiment}`;
                 card.style.animationDelay = `${i * 0.05}s`;
+                card.onclick = () => openModal(item, sentiment);
                 
                 card.innerHTML = `
                     <div class="news-header">
                         <span class="ticker">${item.Ticker || 'UNKNOWN'}</span>
                         <span class="sentiment-badge ${sentiment}">${getSentimentLabel(sentiment)}</span>
                     </div>
-                    <div class="news-source">Source: <a href="${item.source}" target="_blank">${item.source?.slice(0, 70)}...</a></div>
+                    <div class="news-source">Source: <a href="${item.source}" target="_blank" onclick="event.stopPropagation()">${item.source?.slice(0, 70)}...</a></div>
                     <div class="news-analysis">${item.analysis}</div>
                 `;
                 
@@ -583,6 +731,40 @@
             updateStats(stats);
             document.getElementById('footerDate').textContent = `Data: ${document.getElementById('dateInput').value}`;
         }
+
+        function openModal(item, sentiment) {
+            document.getElementById('modalTicker').textContent = item.Ticker || 'UNKNOWN';
+            document.getElementById('modalSentiment').textContent = getSentimentLabel(sentiment);
+            document.getElementById('modalSentiment').className = `sentiment-badge ${sentiment}`;
+            document.getElementById('modalSource').innerHTML = `Source: <a href="${item.source}" target="_blank">${item.source}</a>`;
+            
+            const analysisEl = document.getElementById('modalAnalysis');
+            if (item.analysis) {
+                analysisEl.innerHTML = marked.parse(item.analysis);
+            } else {
+                analysisEl.innerHTML = '<p>No analysis available.</p>';
+            }
+            
+            document.getElementById('modalOverlay').classList.add('active');
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closeModal() {
+            document.getElementById('modalOverlay').classList.remove('active');
+            document.body.style.overflow = '';
+        }
+
+        document.getElementById('modalOverlay').addEventListener('click', (e) => {
+            if (e.target === document.getElementById('modalOverlay')) {
+                closeModal();
+            }
+        });
+
+        document.getElementById('modalClose').addEventListener('click', closeModal);
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closeModal();
+        });
 
         function detectSentiment(text) {
             if (!text) return 'unknown';
