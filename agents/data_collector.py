@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import io
 from datetime import datetime
 from playwright.async_api import async_playwright
 from playwright_stealth import stealth as stealth_module
@@ -156,18 +157,66 @@ class DataCollectorAgent:
                     try:
                         logger.info(f"Processing: {ann['title'][:50]}")
 
-                        content = ""
+                        content_parts = []
                         pdf_saved = False
-                        pdf_path = None
+                        txt_path = None
 
-                        # Download PDF using httpx with browser cookies and proper headers
-                        pdf_url = ann["pdf_url"]
-                        success, pdf_data = await self._download_pdf_with_cookies(
-                            pdf_url, cookie_dict, origin_url
+                        # Get all PDF URLs for this announcement
+                        all_pdf_urls = ann.get(
+                            "all_pdf_urls",
+                            [ann["pdf_url"]] if ann.get("pdf_url") else [],
                         )
 
-                        if success and pdf_data and len(pdf_data) > 100:
-                            # Save as .txt with safe filename
+                        if not all_pdf_urls:
+                            logger.warning(
+                                f"No PDF URLs for announcement: {ann['title']}"
+                            )
+                            ann["content"] = (
+                                f"Title: {ann['title']}\nTicker: {ann['ticker']}\nDate: {ann['date']}"
+                            )
+                            ann["pdf_saved"] = False
+                            ann["pdf_path"] = None
+                            parsed_data.append(ann)
+                            continue
+
+                        # Download and extract text from ALL PDFs
+                        for pdf_idx, pdf_url in enumerate(all_pdf_urls):
+                            logger.info(
+                                f"  Downloading PDF {pdf_idx + 1}/{len(all_pdf_urls)}: {pdf_url[-50:]}"
+                            )
+
+                            success, pdf_data = await self._download_pdf_with_cookies(
+                                pdf_url, cookie_dict, origin_url
+                            )
+
+                            if success and pdf_data and len(pdf_data) > 100:
+                                # Extract text from PDF
+                                pdf_buffer = io.BytesIO(pdf_data)
+                                doc = fitz.open(stream=pdf_buffer, filetype="pdf")
+                                for page_idx, page_doc in enumerate(doc):
+                                    page_text = page_doc.get_text()
+                                    if page_text.strip():
+                                        content_parts.append(
+                                            f"--- PDF {pdf_idx + 1}, Page {page_idx + 1} ---\n"
+                                        )
+                                        content_parts.append(page_text)
+                                doc.close()
+
+                                logger.info(
+                                    f"  Extracted PDF {pdf_idx + 1}: {len(content_parts)} chars accumulated"
+                                )
+                            else:
+                                logger.warning(
+                                    f"  Failed to download PDF {pdf_idx + 1}: {pdf_url[-50:]}"
+                                )
+
+                        # Combine all content
+                        combined_content = (
+                            "\n\n".join(content_parts) if content_parts else ""
+                        )
+
+                        if combined_content:
+                            # Save as combined .txt file
                             safe_title = "".join(
                                 c for c in ann["title"] if c.isalnum() or c in " -_"
                             ).strip()[:50]
@@ -176,36 +225,25 @@ class DataCollectorAgent:
                             )
                             txt_path = os.path.join(raw_pdf_dir, txt_filename)
 
-                            # Extract text from PDF
-                            import fitz
-                            import io
-
-                            pdf_buffer = io.BytesIO(pdf_data)
-                            doc = fitz.open(stream=pdf_buffer, filetype="pdf")
-                            content = ""
-                            for page in doc:
-                                content += page.get_text()
-                            doc.close()
-
-                            # Save as .txt
                             with open(txt_path, "w", encoding="utf-8") as f:
-                                f.write(content)
+                                f.write(combined_content)
                             pdf_saved = True
                             logger.info(
-                                f"Saved TXT: {txt_filename} ({len(content)} chars)"
+                                f"Saved combined TXT: {txt_filename} ({len(combined_content)} chars from {len(all_pdf_urls)} PDFs)"
                             )
+                            ann["content"] = combined_content
                         else:
+                            # No content extracted from any PDF
                             logger.warning(
-                                f"Failed to download PDF: {ann['pdf_url'][-50:]}"
+                                f"  No content extracted from any PDF for {ann['ticker']}"
+                            )
+                            ann["content"] = (
+                                f"Title: {ann['title']}\nTicker: {ann['ticker']}\nDate: {ann['date']}"
                             )
 
-                        ann["content"] = (
-                            content
-                            if content
-                            else f"Title: {ann['title']}\nTicker: {ann['ticker']}\nDate: {ann['date']}"
-                        )
                         ann["pdf_saved"] = pdf_saved
                         ann["pdf_path"] = txt_path if pdf_saved else None
+                        # Keep all_pdf_urls in the announcement for MongoDB
 
                         parsed_data.append(ann)
                         logger.info(f"Added: {ann['ticker']}")
@@ -219,6 +257,7 @@ class DataCollectorAgent:
                             f"Title: {ann['title']}\nTicker: {ann['ticker']}\nDate: {ann['date']}"
                         )
                         ann["pdf_saved"] = False
+                        ann["pdf_path"] = None
                         parsed_data.append(ann)
                         continue
 
@@ -264,6 +303,80 @@ class DataCollectorAgent:
                 raise
             finally:
                 await browser.close()
+
+    async def _collect_using_base_selector(
+        self, page, today_iso: str, today_day: str
+    ) -> list[dict]:
+        """Collect announcements using the known base container element provided by user."""
+        logger.info("Trying base selector strategy...")
+
+        announcements = []
+
+        # Base selector: containers that wrap each announcement
+        # Matches: #app > div.sticky-footer-container-item.--pushed > main > div > div > div.tab-content.disclosure-tab > div:nth-child(2) > div > div:nth-child(4)
+        # Simplified: any direct child div under that specific path
+        base_selector = "#app div.sticky-footer-container-item.--pushed main div.tab-content.disclosure-tab div:nth-child(2) div > div"
+
+        containers = await page.query_selector_all(base_selector)
+        logger.info(f"Base selector found {len(containers)} containers")
+
+        for idx, container in enumerate(containers):
+            try:
+                # Extract ticker from h6 element within container
+                h6_elem = await container.query_selector("h6")
+                if not h6_elem:
+                    logger.debug(f"Container {idx}: no h6 element, skipping")
+                    continue
+
+                h6_text = await h6_elem.inner_text()
+                ticker = self._extract_ticker(h6_text)
+
+                # Gather ALL PDF links within this container
+                pdf_links = await container.query_selector_all("a[href$='.pdf']")
+                all_pdf_urls = []
+
+                for link in pdf_links:
+                    pdf_url = await link.get_attribute("href")
+                    if pdf_url:
+                        all_pdf_urls.append(pdf_url)
+
+                if not all_pdf_urls:
+                    logger.debug(f"Container {idx}: no PDF links found, skipping")
+                    continue
+
+                # Title from h6 text (clean it)
+                title = h6_text.strip()
+
+                # Date verification: check if container text contains today's day
+                container_text = await container.inner_text()
+                if today_day not in container_text:
+                    logger.debug(
+                        f"Container {idx}: date mismatch (no '{today_day}'), skipping"
+                    )
+                    continue
+
+                announcements.append(
+                    {
+                        "ticker": ticker,
+                        "title": title,
+                        "date": today_iso,
+                        "pdf_url": all_pdf_urls[
+                            0
+                        ],  # First PDF for backward compatibility
+                        "all_pdf_urls": all_pdf_urls,  # Complete list of all PDFs
+                        "content": "",
+                    }
+                )
+
+                logger.info(
+                    f"Base selector found: {ticker} - {title[:50]} ({len(all_pdf_urls)} PDFs)"
+                )
+
+            except Exception as e:
+                logger.warning(f"Error processing base selector container {idx}: {e}")
+                continue
+
+        return announcements
 
     async def _diagnose_page_structure(self, page) -> None:
         """Diagnose what selectors work on the current page structure."""
@@ -330,7 +443,21 @@ class DataCollectorAgent:
 
         announcements = []
 
-        # Try multiple selector strategies for table rows
+        # STRATEGY 1: Use the specific base container selector (most reliable)
+        base_announcements = await self._collect_using_base_selector(
+            page, today_iso, today_day
+        )
+        if base_announcements:
+            logger.info(
+                f"Base selector strategy returned {len(base_announcements)} announcements"
+            )
+            return base_announcements
+
+        logger.info(
+            "Base selector returned 0 results, falling back to row-based strategies..."
+        )
+
+        # STRATEGY 2: Fall back to existing row-based selector strategies
         selector_strategies = [
             ("table tbody tr", "td", "Standard table"),
             ("table tr", "td", "Any table row"),
@@ -359,12 +486,11 @@ class DataCollectorAgent:
 
         for i, row in enumerate(rows):
             try:
-                # Try to extract date, company, and PDF link from various cell positions
-                # Try first 3 cells for date
+                # Try to extract date, company, and ALL PDF links from the row
                 date_text = ""
                 company_text = ""
-                pdf_url = ""
                 title = ""
+                all_pdf_urls = []
 
                 # Get all cells in the row
                 cells = await row.query_selector_all(cell_selector)
@@ -372,14 +498,18 @@ class DataCollectorAgent:
                 for cell_idx, cell in enumerate(cells[:4]):  # Check first 4 cells
                     cell_text = await cell.inner_text()
 
-                    # Check if this cell contains a PDF link
-                    link_elem = await cell.query_selector("a[href$='.pdf']")
-                    if link_elem:
-                        pdf_url = await link_elem.get_attribute("href")
-                        title = (await link_elem.inner_text()).strip() or cell_text
+                    # Check if this cell contains PDF links - collect ALL in this cell
+                    cell_pdf_links = await cell.query_selector_all("a[href$='.pdf']")
+                    for link in cell_pdf_links:
+                        pdf_url = await link.get_attribute("href")
+                        if pdf_url:
+                            all_pdf_urls.append(pdf_url)
+                            # Use first link's text as title if not already set
+                            if not title:
+                                link_text = (await link.inner_text()).strip()
+                                title = link_text or cell_text
 
                     # Check if this cell contains a date
-                    # Date typically contains day number and month/year
                     if (
                         any(char.isdigit() for char in cell_text)
                         and len(cell_text) < 20
@@ -388,14 +518,17 @@ class DataCollectorAgent:
                             date_text = cell_text
                             break  # Assume first match is date
 
-                # If no PDF link found in cells, search whole row
-                if not pdf_url:
-                    link_elem = await row.query_selector("a[href$='.pdf']")
-                    if link_elem:
-                        pdf_url = await link_elem.get_attribute("href")
-                        title = (await link_elem.inner_text()).strip()
+                # If no PDFs found in cells, search whole row for ALL links
+                if not all_pdf_urls:
+                    row_pdf_links = await row.query_selector_all("a[href$='.pdf']")
+                    for link in row_pdf_links:
+                        pdf_url = await link.get_attribute("href")
+                        if pdf_url:
+                            all_pdf_urls.append(pdf_url)
+                            if not title:
+                                title = (await link.inner_text()).strip()
 
-                if not pdf_url:
+                if not all_pdf_urls:
                     continue
 
                 # Use second cell as company if available
@@ -444,11 +577,20 @@ class DataCollectorAgent:
                             "ticker": ticker,
                             "title": title.strip(),
                             "date": today_iso,
-                            "pdf_url": pdf_url,
+                            "pdf_url": all_pdf_urls[
+                                0
+                            ],  # First PDF for backward compatibility
+                            "all_pdf_urls": all_pdf_urls,  # All PDFs list
                             "content": "",
                         }
                     )
-                    logger.info(f"Found announcement: {ticker} - {title[:50]}")
+                    logger.info(
+                        f"Found announcement: {ticker} - {title[:50]} ({len(all_pdf_urls)} PDFs)"
+                    )
+
+            except Exception as e:
+                logger.warning(f"Error processing row {i}: {e}")
+                continue
 
             except Exception as e:
                 logger.warning(f"Error processing row {i}: {e}")
@@ -475,7 +617,7 @@ class DataCollectorAgent:
 
                 # Check parent context for date
                 parent = await page.evaluate("""(el) => el && el.parentElement""", link)
-                parent_text = parent.inner_text() if parent else ""
+                parent_text = parent.innerText if parent else ""
 
                 # Extract potential date from context
                 today_day = datetime.now().strftime("%d")
@@ -486,6 +628,7 @@ class DataCollectorAgent:
                             "title": title if title else "PDF Announcement",
                             "date": today_iso,
                             "pdf_url": pdf_url,
+                            "all_pdf_urls": [pdf_url],  # Single-item list
                             "content": "",
                         }
                     )
@@ -504,6 +647,7 @@ class DataCollectorAgent:
                         "title": title if title else "PDF Announcement",
                         "date": today_iso,
                         "pdf_url": pdf_url,
+                        "all_pdf_urls": [pdf_url],  # Single-item list
                         "content": "",
                     }
                 )
@@ -609,18 +753,30 @@ class DataCollectorAgent:
             return ""
 
     def _extract_ticker(self, company_text: str) -> str:
-        """Extract stock ticker from company name/code."""
-        # Simple extraction - can be improved based on actual format
-        # Look for common ticker patterns (usually 3-4 uppercase letters)
+        """Extract stock ticker from announcement title using bracket or parentheses pattern."""
         import re
 
-        # Try to find ticker in parentheses or brackets
-        match = re.search(r"\(([A-Z]{3,4})\)", company_text)
-        if match:
-            return match.group(1)
+        if not company_text:
+            return "UNKNOWN"
 
-        # Fallback: use first few characters or full text
-        return company_text.strip()[:10]
+        # IDX format: "Title [TICKER" (brackets with optional trailing space)
+        # Examples: "[SKRN ]", "[MINE ]", "[ADRO]"
+        bracket_match = re.search(r"\[([A-Z]{3,4})\s?\]", company_text)
+        if bracket_match:
+            return bracket_match.group(1)
+
+        # Fallback: parentheses pattern "(TICKER)"
+        paren_match = re.search(r"\(([A-Z]{3,4})\)", company_text)
+        if paren_match:
+            return paren_match.group(1)
+
+        # Fallback: standalone uppercase 3-4 letter word
+        word_match = re.search(r"\b([A-Z]{3,4})\b", company_text)
+        if word_match:
+            return word_match.group(1)
+
+        # Last resort: first 10 characters
+        return company_text.strip()[:10] if company_text else "UNKNOWN"
 
     async def _download_pdf_with_cookies(
         self, pdf_url: str, cookies: dict, origin_url: str
