@@ -191,6 +191,11 @@ Investor Relation Automation/
 
 ## Agent-Specific Guidelines (from CoderDev)
 
+### Auto-Commit and Push Rule
+- **AUTO_PUSH_README.md**: After every code modification, run python auto_push.py --once (or use the batch file uto_push.bat) to automatically commit and push changes. This ensures all code changes are versioned and backed up immediately.
+- The auto-push service runs every 60 seconds by default (configurable via --interval), checking for git changes and committing with descriptive messages.
+- For manual runs: python auto_push.py --once does a single commit-and-push cycle.
+
 ### Plan Mode
 - Enter plan mode for any non-trivial task (3+ steps or architectural decisions)
 - Write detailed specs upfront to reduce ambiguity

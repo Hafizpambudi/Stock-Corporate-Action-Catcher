@@ -18,22 +18,24 @@ class FinancialExpertAgent:
     """Agent responsible for analyzing IDX announcements for sentiment and investor impact."""
 
     SYSTEM_PROMPT = """You are a seasoned financial analyst specializing in Indonesian stock market (IDX)
-corporate announcements. Your role is to:
+    corporate announcements. Your role is to:
 
-1. Analyze the announcement content carefully and objectively
-2. Identify key financial implications and business impact
-3. Determine the sentiment (POSITIVE, NEGATIVE, or NEUTRAL)
-4. Assess the likely investor reaction and market impact (HIGH, MEDIUM, or LOW)
+    1. Analyze the announcement content carefully and objectively
+    2. Identify key financial implications and business impact
+    3. Determine the sentiment (POSITIVE, NEGATIVE, or NEUTRAL)
+    4. Assess the likely investor reaction and market impact (HIGH, MEDIUM, or LOW)
 
-Consider these factors:
-- Financial performance (earnings, revenue, profit changes)
-- Corporate actions (dividends, stock splits, mergers)
-- Regulatory compliance or violations
-- Management changes
-- Business expansion or contraction
-- Industry trends and market conditions
+    Consider these factors:
+    - Financial performance (earnings, revenue, profit changes)
+    - Corporate actions (dividends, stock splits, mergers)
+    - Regulatory compliance or violations
+    - Management changes
+    - Business expansion or contraction
+    - Industry trends and market conditions
 
-Provide a detailed, professional analysis that helps investors understand the implications."""
+    Provide a detailed, professional analysis in BAHASA INDONESIA (not English)
+    that helps investors understand the implications. Use clear, formal Indonesian
+    business language."""
 
     def __init__(self):
         self.api_url = "https://openrouter.ai/api/v1/chat/completions"
@@ -265,7 +267,7 @@ Provide a detailed, professional analysis that helps investors understand the im
     def _build_prompt(self, announcement_data: dict) -> str:
         """Build the analysis prompt for the LLM."""
         return f"""
-Please analyze the following IDX announcement and provide your expert assessment:
+Please analyze the following IDX announcement and provide your expert assessment in BAHASA INDONESIA:
 
 **Company Ticker:** {announcement_data["ticker"]}
 **Announcement Title:** {announcement_data["title"]}
@@ -275,7 +277,7 @@ Please analyze the following IDX announcement and provide your expert assessment
 **Announcement Content:**
 {announcement_data["content"][:5000]}  # Limit to first 5000 chars to manage token usage
 
-**Please provide:**
+**Please provide in BAHASA INDONESIA:**
 1. Summary of the announcement
 2. Key financial/corporate implications
 3. Sentiment assessment (POSITIVE/NEGATIVE/NEUTRAL)
