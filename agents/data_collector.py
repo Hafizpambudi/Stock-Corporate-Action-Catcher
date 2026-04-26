@@ -3,12 +3,11 @@ import logging
 import os
 import io
 from datetime import datetime
-from playwright.async_api import async_playwright
-from playwright_stealth import stealth as stealth_module
+from scrapling.fetchers import AsyncStealthySession
 import fitz  # PyMuPDF
 import httpx
 import urllib.parse
-from typing import Optional
+from typing import Optional, Tuple
 
 from config.settings import IDX_BASE_URL, OUTPUT_DIR, RAW_DIR, MONGO_URI
 
@@ -54,205 +53,107 @@ class DataCollectorAgent:
 
     async def run(self) -> list[dict]:
         """Main execution: browse IDX, collect today's announcements, parse PDFs."""
-        logger.info("Starting Data Collector Agent...")
+        logger.info("Starting Data Collector Agent with Scrapling StealthyFetcher...")
 
-        # Use playwright-stealth to bypass Cloudflare anti-bot protection
-        stealth = stealth_module.Stealth(
-            navigator_webdriver=True,  # Hide webdriver property
-            navigator_plugins=True,  # Hide plugins
-            navigator_permissions=True,  # Hide permissions
-        )
+        # Prepare debug file paths
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        screenshot_path = os.path.join(DEBUG_DIR, f"page_initial_{timestamp}.png")
+        html_path = os.path.join(DEBUG_DIR, f"page_initial_{timestamp}.html")
 
-        async with stealth.use_async(async_playwright()) as p:
-            # Launch browser with stealth
-            browser = await p.chromium.launch(
-                headless=True,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--disable-dev-shm-usage",
-                    "--no-sandbox",
-                ],
+        # Page action to capture screenshot before page closes
+        async def debug_page_action(page):
+            """Capture screenshot for debugging."""
+            await page.screenshot(path=screenshot_path, full_page=True)
+            logger.info(f"Screenshot saved: {screenshot_path}")
+
+        async with AsyncStealthySession(
+            headless=True,
+            solve_cloudflare=True,
+            block_webrtc=True,
+            hide_canvas=True,
+            block_ads=True,
+            timeout=120000,
+            network_idle=True,
+            load_dom=True,
+            real_chrome=True,
+            locale="en-US",
+            timezone_id="Asia/Jakarta",
+            retries=3,
+            retry_delay=2,
+        ) as session:
+            logger.info(f"Navigating to {IDX_BASE_URL}")
+            response = await session.fetch(
+                IDX_BASE_URL,
+                wait_selector="table tbody tr, .listing-item, .announcement-item",
+                timeout=120000,
+                wait=5000,  # Wait 5s after page load for JS to finish
             )
-            page = await browser.new_page()
 
-            # Set realistic viewport
-            await page.set_viewport_size({"width": 1920, "height": 1080})
+            logger.info(f"Response status: {response.status}")
 
+            # Dump HTML from response body
+            html_content = response.body
+            if isinstance(html_content, bytes):
+                html_content = html_content.decode("utf-8", errors="replace")
+            with open(html_path, "w", encoding="utf-8") as f:
+                f.write(html_content[:50000])
+            logger.info(f"HTML dump saved: {html_path} ({len(html_content)} bytes)")
+
+            # Get page title
+            title_text = response.css('title::text').get()
+            if title_text:
+                logger.info(f"Page title: {title_text}")
+
+            # Diagnose page structure
+            await self._diagnose_page_structure(response)
+
+            # Collect today's announcements
+            announcements = await self._collect_todays_announcements(response)
+            logger.info(f"Found {len(announcements)} announcements for today")
+
+            # Parse PDFs
+            parsed_data = []
+
+            # Build cookie dict from the browser context to include all cookies
             try:
-                # Navigate to IDX disclosure page
-                logger.info(f"Navigating to {IDX_BASE_URL}")
-                await page.goto(
-                    IDX_BASE_URL, wait_until="domcontentloaded", timeout=120000
-                )
+                cookies_list = await session.context.cookies()
+                cookie_dict = {c['name']: c['value'] for c in cookies_list if 'name' in c and 'value' in c}
+            except Exception as e:
+                logger.warning(f"Could not get context cookies: {e}, falling back to response cookies")
+                cookie_dict = {}
+                for cookie in response.cookies:
+                    if isinstance(cookie, dict):
+                        name = cookie.get('name')
+                        value = cookie.get('value')
+                        if name and value:
+                            cookie_dict[name] = value
 
-                # Check for Cloudflare challenge page
-                title = await page.title()
-                if "cloudflare" in title.lower() or "attention" in title.lower():
-                    logger.warning(
-                        "Cloudflare challenge detected, waiting for resolution..."
+            origin_url = response.url
+            logger.info(f"Got {len(cookie_dict)} cookies from browser session")
+            logger.info(f"Cookie names: {list(cookie_dict.keys())}")
+
+            # Create raw PDF directory for today
+            raw_pdf_dir = get_raw_pdf_dir()
+
+            # Process each announcement (limit to first 1 for debugging)
+            for ann in announcements[:1]:
+                try:
+                    logger.info(f"Processing: {ann['title'][:50]}")
+
+                    content_parts = []
+                    pdf_saved = False
+                    txt_path = None
+
+                    # Get all PDF URLs for this announcement
+                    all_pdf_urls = ann.get(
+                        "all_pdf_urls",
+                        [ann["pdf_url"]] if ann.get("pdf_url") else [],
                     )
-                    # Wait for Cloudflare challenge to complete (max 2 minutes)
-                    for _ in range(120):
-                        await page.wait_for_timeout(1000)
-                        title = await page.title()
-                        if (
-                            "cloudflare" not in title.lower()
-                            and "attention" not in title.lower()
-                        ):
-                            logger.info("Cloudflare challenge passed")
-                            break
-                    else:
-                        logger.error("Cloudflare challenge not resolved after 30s")
 
-                # Wait for dynamic content (table rows) to load
-                # IDX uses JavaScript to render announcements, need to wait for them
-                logger.info("Waiting for table content to render...")
-                await page.wait_for_timeout(5000)  # Extended wait for JS rendering
-
-                # Save initial page state for debugging
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                screenshot_path = os.path.join(
-                    DEBUG_DIR, f"page_initial_{timestamp}.png"
-                )
-                await page.screenshot(path=screenshot_path, full_page=True)
-                logger.info(f"Screenshot saved: {screenshot_path}")
-
-                # Dump HTML for analysis (first 50KB to avoid huge files)
-                html_path = os.path.join(DEBUG_DIR, f"page_initial_{timestamp}.html")
-                html_content = await page.content()
-                with open(html_path, "w", encoding="utf-8") as f:
-                    f.write(html_content[:50000])  # First 50KB
-                logger.info(f"HTML dump saved: {html_path} ({len(html_content)} bytes)")
-
-                # Log page title and URL for verification
-                title = await page.title()
-                logger.info(f"Page title: {title}")
-
-                # Try multiple selectors to find announcement tables
-                await self._diagnose_page_structure(page)
-
-                # Collect today's announcements
-                announcements = await self._collect_todays_announcements(page)
-                logger.info(f"Found {len(announcements)} announcements for today")
-
-                # Parse PDFs and save to raw directory using httpx with browser cookies
-                parsed_data = []
-
-                # Get browser cookies for authenticated PDF downloads
-                browser_context = page.context
-                cookies = await browser_context.cookies()
-                cookie_dict = {c["name"]: c["value"] for c in cookies}
-
-                # Get origin URL for referer
-                origin_url = page.url
-
-                logger.info(f"Got {len(cookie_dict)} cookies from browser session")
-                logger.info(f"Cookie names: {list(cookie_dict.keys())}")
-
-                # Create raw PDF directory for today
-                raw_pdf_dir = get_raw_pdf_dir()
-
-                # Process each announcement
-                for ann in announcements:
-                    try:
-                        logger.info(f"Processing: {ann['title'][:50]}")
-
-                        content_parts = []
-                        pdf_saved = False
-                        txt_path = None
-
-                        # Get all PDF URLs for this announcement
-                        all_pdf_urls = ann.get(
-                            "all_pdf_urls",
-                            [ann["pdf_url"]] if ann.get("pdf_url") else [],
+                    if not all_pdf_urls:
+                        logger.warning(
+                            f"No PDF URLs for announcement: {ann['title']}"
                         )
-
-                        if not all_pdf_urls:
-                            logger.warning(
-                                f"No PDF URLs for announcement: {ann['title']}"
-                            )
-                            ann["content"] = (
-                                f"Title: {ann['title']}\nTicker: {ann['ticker']}\nDate: {ann['date']}"
-                            )
-                            ann["pdf_saved"] = False
-                            ann["pdf_path"] = None
-                            parsed_data.append(ann)
-                            continue
-
-                        # Download and extract text from ALL PDFs
-                        for pdf_idx, pdf_url in enumerate(all_pdf_urls):
-                            logger.info(
-                                f"  Downloading PDF {pdf_idx + 1}/{len(all_pdf_urls)}: {pdf_url[-50:]}"
-                            )
-
-                            success, pdf_data = await self._download_pdf_with_cookies(
-                                pdf_url, cookie_dict, origin_url
-                            )
-
-                            if success and pdf_data and len(pdf_data) > 100:
-                                # Extract text from PDF
-                                pdf_buffer = io.BytesIO(pdf_data)
-                                doc = fitz.open(stream=pdf_buffer, filetype="pdf")
-                                for page_idx, page_doc in enumerate(doc):
-                                    page_text = page_doc.get_text()
-                                    if page_text.strip():
-                                        content_parts.append(
-                                            f"--- PDF {pdf_idx + 1}, Page {page_idx + 1} ---\n"
-                                        )
-                                        content_parts.append(page_text)
-                                doc.close()
-
-                                logger.info(
-                                    f"  Extracted PDF {pdf_idx + 1}: {len(content_parts)} chars accumulated"
-                                )
-                            else:
-                                logger.warning(
-                                    f"  Failed to download PDF {pdf_idx + 1}: {pdf_url[-50:]}"
-                                )
-
-                        # Combine all content
-                        combined_content = (
-                            "\n\n".join(content_parts) if content_parts else ""
-                        )
-
-                        if combined_content:
-                            # Save as combined .txt file
-                            safe_title = "".join(
-                                c for c in ann["title"] if c.isalnum() or c in " -_"
-                            ).strip()[:50]
-                            txt_filename = (
-                                f"{ann['ticker']}_{ann['date']}_{safe_title}.txt"
-                            )
-                            txt_path = os.path.join(raw_pdf_dir, txt_filename)
-
-                            with open(txt_path, "w", encoding="utf-8") as f:
-                                f.write(combined_content)
-                            pdf_saved = True
-                            logger.info(
-                                f"Saved combined TXT: {txt_filename} ({len(combined_content)} chars from {len(all_pdf_urls)} PDFs)"
-                            )
-                            ann["content"] = combined_content
-                        else:
-                            # No content extracted from any PDF
-                            logger.warning(
-                                f"  No content extracted from any PDF for {ann['ticker']}"
-                            )
-                            ann["content"] = (
-                                f"Title: {ann['title']}\nTicker: {ann['ticker']}\nDate: {ann['date']}"
-                            )
-
-                        ann["pdf_saved"] = pdf_saved
-                        ann["pdf_path"] = txt_path if pdf_saved else None
-                        # Keep all_pdf_urls in the announcement for MongoDB
-
-                        parsed_data.append(ann)
-                        logger.info(f"Added: {ann['ticker']}")
-
-                        # Brief delay to avoid rate limiting
-                        await asyncio.sleep(0.5)
-
-                    except Exception as e:
-                        logger.error(f"Error processing {ann['title'][:30]}: {e}")
                         ann["content"] = (
                             f"Title: {ann['title']}\nTicker: {ann['ticker']}\nDate: {ann['date']}"
                         )
@@ -261,51 +162,138 @@ class DataCollectorAgent:
                         parsed_data.append(ann)
                         continue
 
-                saved_count = len([a for a in parsed_data if a.get("pdf_saved")])
-                logger.info(f"Saved {saved_count} TXT files to {raw_pdf_dir}")
-
-                # Ingest to MongoDB if configured
-                if MONGO_AVAILABLE and MONGO_URI:
-                    try:
+                    # Download and extract text from ALL PDFs
+                    for pdf_idx, pdf_url in enumerate(all_pdf_urls):
                         logger.info(
-                            f"Attempting MongoDB ingestion: {len(parsed_data)} documents"
+                            f"  Downloading PDF {pdf_idx + 1}/{len(all_pdf_urls)}: {urllib.parse.urlparse(pdf_url).path}"
                         )
-                        client = MongoClient(
-                            MONGO_URI,
-                            connect=False,  # Don't connect immediately
-                            maxPoolSize=1,
-                            connectTimeoutMS=30000,
-                            socketTimeoutMS=30000,
-                            retryWrites=True,
-                            serverSelectionTimeoutMS=30000,
-                        )
-                        db = client["idx_news"]
-                        collection = db["Daily_News"]
-                        if parsed_data:
-                            result = collection.insert_many(parsed_data)
+
+                        # Download PDF using Scrapling session (byasses 403)
+                        try:
+                            pdf_response = await session.fetch(
+                                pdf_url,
+                                network_idle=False,
+                                load_dom=False,
+                                wait_selector=None,
+                                timeout=60000,
+                                google_search=False,
+                                extra_headers={'Referer': origin_url},
+                            )
+                            pdf_data = pdf_response.body
+                            logger.warning(f"PDF response URL: {pdf_response.url}")
+                            logger.warning(f"PDF request headers: {pdf_response.request_headers}")
+                            logger.warning(f"PDF response headers: {dict(pdf_response.headers)}")
+                            pdf_data = pdf_response.body
+                            # Validate PDF magic bytes
+                            if pdf_data[:5] == b'%PDF-':
+                                logger.info(f"PDF downloaded successfully via Scrapling")
+                            else:
+                                # Show first 200 chars of HTML for debugging
+                                snippet = pdf_data[:500].decode('utf-8', errors='replace')
+                                logger.warning(f"Downloaded content not a PDF (starts with: {snippet})")
+                                pdf_data = b""
+                        except Exception as e:
+                            logger.warning(f"Scrapling PDF fetch failed: {e}")
+                            pdf_data = b""
+
+                        if pdf_data and len(pdf_data) > 100:
+                            pdf_buffer = io.BytesIO(pdf_data)
+                            doc = fitz.open(stream=pdf_buffer, filetype="pdf")
+                            for page_idx, page_doc in enumerate(doc):
+                                page_text = page_doc.get_text()
+                                if page_text.strip():
+                                    content_parts.append(
+                                        f"--- PDF {pdf_idx + 1}, Page {page_idx + 1} ---\n"
+                                    )
+                                    content_parts.append(page_text)
+                            doc.close()
                             logger.info(
-                                f"✓ Inserted {len(result.inserted_ids)} docs into MongoDB (db: idx_news, collection: Daily_News)"
+                                f"  Extracted PDF {pdf_idx + 1}: {len(content_parts)} chars accumulated"
                             )
                         else:
-                            logger.warning("No data to ingest")
-                        client.close()
-                    except Exception as db_err:
-                        logger.error(f"MongoDB ingestion failed: {db_err}")
-                elif MONGO_URI and not MONGO_AVAILABLE:
-                    logger.warning("MongoDB ingestion skipped: pymongo not installed")
-                elif not MONGO_URI:
-                    logger.info("MongoDB ingestion skipped: MONGO_URI not configured")
+                            logger.warning(
+                                f"  Failed to download PDF {pdf_idx + 1}: {urllib.parse.urlparse(pdf_url).path}"
+                            )
 
-                return parsed_data
+                    combined_content = "\n\n".join(content_parts) if content_parts else ""
 
-            except Exception as e:
-                logger.error(f"Error in data collection: {e}")
-                raise
-            finally:
-                await browser.close()
+                    if combined_content:
+                        safe_title = "".join(
+                            c for c in ann["title"] if c.isalnum() or c in " -_"
+                        ).strip()[:50]
+                        txt_filename = f"{ann['ticker']}_{ann['date']}_{safe_title}.txt"
+                        txt_path = os.path.join(raw_pdf_dir, txt_filename)
+
+                        with open(txt_path, "w", encoding="utf-8") as f:
+                            f.write(combined_content)
+                        pdf_saved = True
+                        logger.info(
+                            f"Saved combined TXT: {txt_filename} ({len(combined_content)} chars from {len(all_pdf_urls)} PDFs)"
+                        )
+                        ann["content"] = combined_content
+                    else:
+                        logger.warning(
+                            f"  No content extracted from any PDF for {ann['ticker']}"
+                        )
+                        ann["content"] = (
+                            f"Title: {ann['title']}\nTicker: {ann['ticker']}\nDate: {ann['date']}"
+                        )
+
+                    ann["pdf_saved"] = pdf_saved
+                    ann["pdf_path"] = txt_path if pdf_saved else None
+
+                    parsed_data.append(ann)
+                    logger.info(f"Added: {ann['ticker']}")
+
+                    await asyncio.sleep(0.5)
+
+                except Exception as e:
+                    logger.error(f"Error processing {ann['title'][:30]}: {e}")
+                    ann["content"] = (
+                        f"Title: {ann['title']}\nTicker: {ann['ticker']}\nDate: {ann['date']}"
+                    )
+                    ann["pdf_saved"] = False
+                    ann["pdf_path"] = None
+                    parsed_data.append(ann)
+                    continue
+
+            saved_count = len([a for a in parsed_data if a.get("pdf_saved")])
+            logger.info(f"Saved {saved_count} TXT files to {raw_pdf_dir}")
+
+            # MongoDB ingestion
+            if MONGO_AVAILABLE and MONGO_URI:
+                try:
+                    logger.info(f"Attempting MongoDB ingestion: {len(parsed_data)} documents")
+                    client = MongoClient(
+                        MONGO_URI,
+                        connect=False,
+                        maxPoolSize=1,
+                        connectTimeoutMS=30000,
+                        socketTimeoutMS=30000,
+                        retryWrites=True,
+                        serverSelectionTimeoutMS=30000,
+                    )
+                    db = client["idx_news"]
+                    collection = db["Daily_News"]
+                    if parsed_data:
+                        result = collection.insert_many(parsed_data)
+                        logger.info(
+                            f"✓ Inserted {len(result.inserted_ids)} docs into MongoDB (db: idx_news, collection: Daily_News)"
+                        )
+                    else:
+                        logger.warning("No data to ingest")
+                    client.close()
+                except Exception as db_err:
+                    logger.error(f"MongoDB ingestion failed: {db_err}")
+            elif MONGO_URI and not MONGO_AVAILABLE:
+                logger.warning("MongoDB ingestion skipped: pymongo not installed")
+            elif not MONGO_URI:
+                logger.info("MongoDB ingestion skipped: MONGO_URI not configured")
+
+            return parsed_data
 
     async def _collect_using_base_selector(
-        self, page, today_iso: str, today_day: str
+        self, response, today_iso: str, today_day: str
     ) -> list[dict]:
         """Collect announcements using the known base container element provided by user."""
         logger.info("Trying base selector strategy...")
@@ -313,30 +301,39 @@ class DataCollectorAgent:
         announcements = []
 
         # Base selector: containers that wrap each announcement
-        # Matches: #app > div.sticky-footer-container-item.--pushed > main > div > div > div.tab-content.disclosure-tab > div:nth-child(2) > div > div:nth-child(4)
-        # Simplified: any direct child div under that specific path
-        base_selector = "#app div.sticky-footer-container-item.--pushed main div.tab-content.disclosure-tab div:nth-child(2) div > div"
+        # Use attribute selectors for classes with double hyphens to avoid CSS parsing errors
+        base_selector = (
+            "#app "
+            "div[class~='sticky-footer-container-item'][class~='--pushed'] "
+            "main "
+            "div.tab-content.disclosure-tab "
+            "div:nth-child(2) div > div"
+        )
 
-        containers = await page.query_selector_all(base_selector)
+        try:
+            containers = response.css(base_selector)
+        except Exception as e:
+            logger.warning(f"Base selector syntax error: {e}, skipping base strategy")
+            return []
+
         logger.info(f"Base selector found {len(containers)} containers")
 
         for idx, container in enumerate(containers):
             try:
                 # Extract ticker from h6 element within container
-                h6_elem = await container.query_selector("h6")
-                if not h6_elem:
+                h6_text = container.css("h6::text").get()
+                if not h6_text:
                     logger.debug(f"Container {idx}: no h6 element, skipping")
                     continue
 
-                h6_text = await h6_elem.inner_text()
                 ticker = self._extract_ticker(h6_text)
 
                 # Gather ALL PDF links within this container
-                pdf_links = await container.query_selector_all("a[href$='.pdf']")
+                pdf_links = container.css('a[href$=".pdf"]')
                 all_pdf_urls = []
 
                 for link in pdf_links:
-                    pdf_url = await link.get_attribute("href")
+                    pdf_url = link.attrib.get('href')
                     if pdf_url:
                         all_pdf_urls.append(pdf_url)
 
@@ -348,7 +345,7 @@ class DataCollectorAgent:
                 title = h6_text.strip()
 
                 # Date verification: check if container text contains today's day
-                container_text = await container.inner_text()
+                container_text = container.get()
                 if today_day not in container_text:
                     logger.debug(
                         f"Container {idx}: date mismatch (no '{today_day}'), skipping"
@@ -360,9 +357,7 @@ class DataCollectorAgent:
                         "ticker": ticker,
                         "title": title,
                         "date": today_iso,
-                        "pdf_url": all_pdf_urls[
-                            0
-                        ],  # First PDF for backward compatibility
+                        "pdf_url": all_pdf_urls[0],  # First PDF for backward compatibility
                         "all_pdf_urls": all_pdf_urls,  # Complete list of all PDFs
                         "content": "",
                     }
@@ -378,7 +373,7 @@ class DataCollectorAgent:
 
         return announcements
 
-    async def _diagnose_page_structure(self, page) -> None:
+    async def _diagnose_page_structure(self, response) -> None:
         """Diagnose what selectors work on the current page structure."""
         logger.info("=== Diagnosing page structure ===")
 
@@ -398,7 +393,7 @@ class DataCollectorAgent:
 
         for selector, description in selector_tests:
             try:
-                elements = await page.query_selector_all(selector)
+                elements = response.css(selector)
                 logger.info(
                     f"Selector '{selector}' ({description}): found {len(elements)} elements"
                 )
@@ -415,22 +410,18 @@ class DataCollectorAgent:
         ]
 
         for selector in date_selectors:
-            element = await page.query_selector(selector)
-            if element:
+            elements = response.css(selector)
+            if elements:
                 logger.info(f"Found date input: {selector}")
 
-        # Check for "Load More" or pagination buttons
-        load_more = (
-            await page.query_selector("button:has-text('Load More')")
-            or await page.query_selector("button:has-text('Muat Lain')")
-            or await page.query_selector("[aria-label*='load']")
-        )
-        if load_more:
+        # Check for "Load More" or pagination buttons (simple text matching)
+        load_more_buttons = response.xpath("//button[contains(., 'Load More') or contains(., 'Muat Lain')]")
+        if load_more_buttons:
             logger.info("Found 'Load More' button - page uses pagination")
 
         logger.info("=== End diagnosis ===")
 
-    async def _collect_todays_announcements(self, page) -> list[dict]:
+    async def _collect_todays_announcements(self, response) -> list[dict]:
         """Scrape today's announcements from the IDX page."""
         today = datetime.now()
         today_day = today.strftime("%d")  # Day: "16"
@@ -445,7 +436,7 @@ class DataCollectorAgent:
 
         # STRATEGY 1: Use the specific base container selector (most reliable)
         base_announcements = await self._collect_using_base_selector(
-            page, today_iso, today_day
+            response, today_iso, today_day
         )
         if base_announcements:
             logger.info(
@@ -472,7 +463,7 @@ class DataCollectorAgent:
         cell_selector = None
 
         for selector, cell_sel, description in selector_strategies:
-            rows = await page.query_selector_all(selector)
+            rows = response.css(selector)
             logger.info(f"Trying '{selector}' ({description}): found {len(rows)} rows")
             if rows:
                 used_selector = selector
@@ -482,7 +473,7 @@ class DataCollectorAgent:
         if not rows:
             logger.warning("No table rows found with any selector strategy")
             # Fallback: Try to get all PDF links on the page
-            return await self._fallback_collect_pdfs(page, today_iso)
+            return await self._fallback_collect_pdfs(response, today_iso)
 
         for i, row in enumerate(rows):
             try:
@@ -493,20 +484,20 @@ class DataCollectorAgent:
                 all_pdf_urls = []
 
                 # Get all cells in the row
-                cells = await row.query_selector_all(cell_selector)
+                cells = row.css(cell_selector)
 
                 for cell_idx, cell in enumerate(cells[:4]):  # Check first 4 cells
-                    cell_text = await cell.inner_text()
+                    cell_text = cell.get()
 
                     # Check if this cell contains PDF links - collect ALL in this cell
-                    cell_pdf_links = await cell.query_selector_all("a[href$='.pdf']")
+                    cell_pdf_links = cell.css('a[href$=".pdf"]')
                     for link in cell_pdf_links:
-                        pdf_url = await link.get_attribute("href")
+                        pdf_url = link.attrib.get('href')
                         if pdf_url:
                             all_pdf_urls.append(pdf_url)
                             # Use first link's text as title if not already set
                             if not title:
-                                link_text = (await link.inner_text()).strip()
+                                link_text = link.get().strip()
                                 title = link_text or cell_text
 
                     # Check if this cell contains a date
@@ -520,20 +511,20 @@ class DataCollectorAgent:
 
                 # If no PDFs found in cells, search whole row for ALL links
                 if not all_pdf_urls:
-                    row_pdf_links = await row.query_selector_all("a[href$='.pdf']")
+                    row_pdf_links = row.css('a[href$=".pdf"]')
                     for link in row_pdf_links:
-                        pdf_url = await link.get_attribute("href")
+                        pdf_url = link.attrib.get('href')
                         if pdf_url:
                             all_pdf_urls.append(pdf_url)
                             if not title:
-                                title = (await link.inner_text()).strip()
+                                title = link.get().strip()
 
                 if not all_pdf_urls:
                     continue
 
                 # Use second cell as company if available
                 if len(cells) >= 2:
-                    company_text = await cells[1].inner_text()
+                    company_text = cells[1].get()
 
                 # Check if date matches today more robustly
                 date_matches = (
@@ -563,7 +554,7 @@ class DataCollectorAgent:
 
                 if not date_matches and date_text:
                     # Also check row's text content for today's date
-                    row_text = await row.inner_text()
+                    row_text = row.get()
                     if today_day in row_text and (
                         today_year in row_text or today_str.split()[1] in row_text
                     ):
@@ -577,9 +568,7 @@ class DataCollectorAgent:
                             "ticker": ticker,
                             "title": title.strip(),
                             "date": today_iso,
-                            "pdf_url": all_pdf_urls[
-                                0
-                            ],  # First PDF for backward compatibility
+                            "pdf_url": all_pdf_urls[0],  # First PDF for backward compatibility
                             "all_pdf_urls": all_pdf_urls,  # All PDFs list
                             "content": "",
                         }
@@ -592,32 +581,28 @@ class DataCollectorAgent:
                 logger.warning(f"Error processing row {i}: {e}")
                 continue
 
-            except Exception as e:
-                logger.warning(f"Error processing row {i}: {e}")
-                continue
-
         # If no date-specific matches, fall back to collecting all PDFs
         if not announcements:
             logger.info("No date-specific matches found, falling back to all PDFs")
-            return await self._fallback_collect_pdfs(page, today_iso)
+            return await self._fallback_collect_pdfs(response, today_iso)
 
         return announcements
 
-    async def _fallback_collect_pdfs(self, page, today_iso: str) -> list[dict]:
+    async def _fallback_collect_pdfs(self, response, today_iso: str) -> list[dict]:
         """Fallback: collect all PDF links on page with today's date context."""
         logger.info("Attempting fallback PDF collection...")
 
         announcements = []
-        pdf_links = await page.query_selector_all("a[href$='.pdf']")
+        pdf_elements = response.css('a[href$=".pdf"]')
 
-        for link in pdf_links:
+        for link in pdf_elements:
             try:
-                pdf_url = await link.get_attribute("href")
-                title = (await link.inner_text()).strip() if link else ""
+                pdf_url = link.attrib.get('href')
+                title = link.get().strip() if link else ""
 
                 # Check parent context for date
-                parent = await page.evaluate("""(el) => el && el.parentElement""", link)
-                parent_text = parent.innerText if parent else ""
+                parent = link.parent
+                parent_text = parent.get() if parent else ""
 
                 # Extract potential date from context
                 today_day = datetime.now().strftime("%d")
@@ -638,9 +623,9 @@ class DataCollectorAgent:
         if not announcements:
             # Last resort: collect all PDFs
             logger.warning("No date context found, collecting all PDFs")
-            for link in pdf_links:
-                pdf_url = await link.get_attribute("href")
-                title = (await link.inner_text()).strip() if link else ""
+            for link in pdf_elements:
+                pdf_url = link.attrib.get('href')
+                title = link.get().strip() if link else ""
                 announcements.append(
                     {
                         "ticker": "UNKNOWN",
@@ -781,58 +766,101 @@ class DataCollectorAgent:
     async def _download_pdf_with_cookies(
         self, pdf_url: str, cookies: dict, origin_url: str
     ) -> tuple[bool, bytes]:
-        """Download PDF using httpx with browser cookies and proper headers."""
-        try:
-            # Prepare headers to mimic browser request
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                "Accept": "application/pdf,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.9,id;q=0.8",
-                "Accept-Encoding": "gzip, deflate, br",
-                "Referer": origin_url,
-                "Origin": "https://www.idx.co.id",
-            }
+        """Download PDF using httpx with browser cookies passed from session."""
+        # Use httpx with the cookies from Scrapling session
+        # Scrapling already handled Cloudflare on the main page, cookies are valid
+        max_retries = 5
 
-            async with httpx.AsyncClient(
-                cookies=cookies,
-                headers=headers,
-                follow_redirects=True,
-                timeout=30.0,
-            ) as client:
-                # First try with cookies
-                response = await client.get(pdf_url)
+        # Comprehensive user agents to rotate through
+        user_agents = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1.1 Safari/605.1.15",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0",
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+        ]
 
-                if response.status_code == 200 and b"%PDF" in response.content[:100]:
-                    return True, response.content
+        # Base headers that mimic real browser requests
+        base_headers = {
+            "Accept": "application/pdf,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9,id;q=0.8",
+            "Accept-Encoding": "gzip, deflate, br, zstd",
+            "DNT": "1",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-User": "?1",
+            "Sec-Ch-Ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+            "Sec-Ch-Ua-Mobile": "?0",
+            "Sec-Ch-Ua-Platform": '"Windows"',
+            "Cache-Control": "max-age=0",
+            "Pragma": "no-cache",
+        }
 
-                # If 403, try without auth cookies but with proper headers
-                if response.status_code == 403:
-                    logger.info(f"Got 403, retrying without auth cookies...")
+        for attempt in range(max_retries):
+            try:
+                # Rotate user agent per attempt
+                current_ua = user_agents[attempt % len(user_agents)]
+                headers = base_headers.copy()
+                headers["User-Agent"] = current_ua
+                headers["Referer"] = origin_url
 
-                    # Simple headers without cookies
-                    simple_headers = {
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                        "Accept": "application/pdf,*/*",
-                        "Referer": "https://www.idx.co.id/",
-                    }
+                logger.debug(f"PDF download attempt {attempt + 1}/{max_retries} with UA: {current_ua[:50]}...")
 
-                    async with httpx.AsyncClient(
-                        headers=simple_headers,
-                        follow_redirects=True,
-                        timeout=30.0,
-                    ) as simple_client:
-                        response = await simple_client.get(pdf_url)
-                        if response.status_code == 200:
+                # Try with cookies from Scrapling session
+                async with httpx.AsyncClient(
+                    cookies=cookies,
+                    headers=headers,
+                    follow_redirects=True,
+                    timeout=45.0,
+                ) as client:
+                    response = await client.get(pdf_url)
+
+                    if response.status_code == 200:
+                        # Validate it's actually a PDF
+                        content_start = response.content[:200]
+                        if b"%PDF" in content_start or b"PDF" in content_start:
+                            logger.info(f"PDF downloaded successfully on attempt {attempt + 1}")
                             return True, response.content
+                        else:
+                            logger.warning(f"Response not a PDF (starts with: {content_start[:50]})")
+                            return False, b""
 
-                logger.warning(
-                    f"PDF download failed: {response.status_code} for {pdf_url[-40:]}"
-                )
-                return False, b""
+                    elif response.status_code == 403:
+                        logger.debug(f"403 Forbidden on attempt {attempt + 1}, retrying...")
+                        # Wait longer before retry
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(5 * (2 ** attempt))
+                        continue
 
-        except httpx.TimeoutException:
-            logger.warning(f"Timeout downloading PDF: {pdf_url[-40:]}")
-            return False, b""
-        except Exception as e:
-            logger.warning(f"Error downloading PDF: {e}")
-            return False, b""
+                    elif response.status_code == 429:
+                        # Rate limited - wait longer
+                        wait_time = 5 * (2 ** attempt)
+                        logger.warning(f"Rate limited (429), waiting {wait_time}s...")
+                        await asyncio.sleep(wait_time)
+                        continue
+
+                    else:
+                        logger.warning(f"HTTP {response.status_code} on attempt {attempt + 1}")
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(3)
+
+            except httpx.TimeoutException:
+                logger.warning(f"Timeout on attempt {attempt + 1}: {urllib.parse.urlparse(pdf_url).path}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2)
+                continue
+
+            except Exception as e:
+                logger.warning(f"Error on attempt {attempt + 1}: {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2)
+                continue
+
+        # All attempts failed
+        logger.error(f"All {max_retries} download attempts failed for {urllib.parse.urlparse(pdf_url).path}")
+        return False, b""
