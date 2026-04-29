@@ -92,11 +92,9 @@ class DataCollectorAgent:
             logger.info(f"Response status: {response.status}")
 
             # Dump HTML from response body
-            html_content = response.body
-            if isinstance(html_content, bytes):
-                html_content = html_content.decode("utf-8", errors="replace")
+            html_content = response.text
             with open(html_path, "w", encoding="utf-8") as f:
-                f.write(html_content[:50000])
+                f.write(html_content)
             logger.info(f"HTML dump saved: {html_path} ({len(html_content)} bytes)")
 
             # Get page title
@@ -179,11 +177,7 @@ class DataCollectorAgent:
                                 google_search=False,
                                 extra_headers={'Referer': origin_url},
                             )
-                            pdf_data = pdf_response.body
-                            logger.warning(f"PDF response URL: {pdf_response.url}")
-                            logger.warning(f"PDF request headers: {pdf_response.request_headers}")
-                            logger.warning(f"PDF response headers: {dict(pdf_response.headers)}")
-                            pdf_data = pdf_response.body
+
                             # Validate PDF magic bytes
                             if pdf_data[:5] == b'%PDF-':
                                 logger.info(f"PDF downloaded successfully via Scrapling")
@@ -434,46 +428,8 @@ class DataCollectorAgent:
 
         announcements = []
 
-        # STRATEGY 1: Use the specific base container selector (most reliable)
-        base_announcements = await self._collect_using_base_selector(
-            response, today_iso, today_day
-        )
-        if base_announcements:
-            logger.info(
-                f"Base selector strategy returned {len(base_announcements)} announcements"
-            )
-            return base_announcements
-
-        logger.info(
-            "Base selector returned 0 results, falling back to row-based strategies..."
-        )
-
-        # STRATEGY 2: Fall back to existing row-based selector strategies
-        selector_strategies = [
-            ("table tbody tr", "td", "Standard table"),
-            ("table tr", "td", "Any table row"),
-            (".listing-item", "div", "Listing item"),
-            (".MuiTableRow-root", "td", "Material UI table"),
-            (".announcement-row", "div", "Announcement row"),
-            ("div[class*='row']", "div", "Div row pattern"),
-        ]
-
-        rows = []
-        used_selector = None
-        cell_selector = None
-
-        for selector, cell_sel, description in selector_strategies:
-            rows = response.css(selector)
-            logger.info(f"Trying '{selector}' ({description}): found {len(rows)} rows")
-            if rows:
-                used_selector = selector
-                cell_selector = cell_sel
-                break
-
-        if not rows:
-            logger.warning("No table rows found with any selector strategy")
-            # Fallback: Try to get all PDF links on the page
-            return await self._fallback_collect_pdfs(response, today_iso)
+        rows = response.css("table tbody tr")
+        cell_selector = "td"
 
         for i, row in enumerate(rows):
             try:

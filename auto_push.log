@@ -21,3 +21,15 @@
 2026-04-26 21:34:36,978 - INFO - Detected 1 changed file(s)
 2026-04-26 21:34:37,043 - ERROR - Failed to stage files: Command '['git', 'add', '-u', 'uto_push.log']' returned non-zero exit status 128.
 2026-04-27 16:43:56,603 - INFO - Detected 3 changed file(s)
+2026-04-27 16:43:56,764 - INFO - Staged: auto_push.log
+2026-04-27 16:43:56,823 - ERROR - Failed to stage files: Command '['git', 'add', '-u', 'gents\\financial_expert.py']' returned non-zero exit status 128.
+2026-04-29 15:10:57,699 - INFO - Starting auto-commit and push service (every 60s)
+2026-04-29 15:10:57,700 - INFO - Repository: D:\Portfolio Project\Investor Relation Automation
+2026-04-29 15:10:57,812 - INFO - Detected 41 changed file(s)
+2026-04-29 15:10:57,954 - INFO - Staged: auto_push.log
+2026-04-29 15:10:58,069 - INFO - Staged deletion: data\output\_debug\page_initial_20260417_141844.html
+2026-04-29 15:10:58,135 - INFO - Staged deletion: data\output\_debug\page_initial_20260417_150902.png
+2026-04-29 15:10:58,275 - INFO - Staged: pyproject.toml
+2026-04-29 15:10:58,441 - INFO - Staged: uv.lock
+2026-04-29 15:10:58,520 - INFO - Staged deletion: data\output\_debug\page_initial_20260417_065408.html
+2026-04-29 15:10:58,598 - ERROR - Failed to stage files: Command '['git', 'add', '-u', 'gents\\data_collector.py']' returned non-zero exit status 128.

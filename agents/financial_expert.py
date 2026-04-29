@@ -784,7 +784,7 @@ Analisis harus profesional, faktual, dan membantu keputusan investasi."""
         # Check daily limit
         if self._daily_request_count >= self.DAILY_LIMIT:
             logger.warning(
-                f"Daily limit ({DAILY_LIMIT}) reached. Waiting until tomorrow..."
+                f"Daily limit ({self.DAILY_LIMIT}) reached. Waiting until tomorrow..."
             )
             tomorrow = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
             tomorrow = tomorrow.replace(day=today + 1)
