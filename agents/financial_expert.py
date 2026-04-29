@@ -220,7 +220,17 @@ class FinancialExpertAgent:
 
                 response.raise_for_status()
                 result = response.json()
-                analysis_text = result["choices"][0]["message"]["content"].strip()
+
+                # Extract content with full structural validation
+                try:
+                    analysis_text = result["choices"][0]["message"]["content"].strip()
+                except (KeyError, IndexError, TypeError) as e:
+                    error_msg = result.get("error", {}).get("message", f"Invalid response structure: {e}")
+                    logger.error(f"API error for {announcement_data['ticker']} (status={response.status_code}): {error_msg}")
+                    logger.error(f"Full response: {result}")
+                    return self._error_response(
+                        announcement_data, f"API error: {error_msg}"
+                    )
 
                 self._track_request()
 
@@ -313,10 +323,18 @@ class FinancialExpertAgent:
                     response.raise_for_status()
                     result = response.json()
 
+                    # Extract content with full structural validation
+                    try:
+                        content_text = result["choices"][0]["message"]["content"].strip()
+                    except (KeyError, IndexError, TypeError) as e:
+                        error_msg = result.get("error", {}).get("message", f"Invalid response structure: {e}")
+                        logger.error(f"API error in chunk {i} (status={response.status_code}): {error_msg}")
+                        logger.error(f"Full response: {result}")
+                        all_chunk_analyses.append({"chunk_index": i, "error": f"API error: {error_msg}"})
+                        break
+
                     # Try to parse JSON response, fallback to text
-                    chunk_result = self._parse_chunk_response(
-                        result["choices"][0]["message"]["content"].strip(), i
-                    )
+                    chunk_result = self._parse_chunk_response(content_text, i)
 
                     self._track_request()
 
@@ -401,10 +419,18 @@ class FinancialExpertAgent:
                     response.raise_for_status()
                     result = response.json()
 
+                    # Extract content with full structural validation
+                    try:
+                        content_text = result["choices"][0]["message"]["content"].strip()
+                    except (KeyError, IndexError, TypeError) as e:
+                        error_msg = result.get("error", {}).get("message", f"Invalid response structure: {e}")
+                        logger.error(f"API error in chunk {i} (status={response.status_code}): {error_msg}")
+                        logger.error(f"Full response: {result}")
+                        all_chunk_analyses.append({"chunk_index": i, "error": f"API error: {error_msg}"})
+                        break
+
                     # Parse JSON response from chunk
-                    chunk_analysis = self._parse_chunk_response(
-                        result["choices"][0]["message"]["content"].strip(), i
-                    )
+                    chunk_analysis = self._parse_chunk_response(content_text, i)
                     chunk_analysis["chunk_index"] = i
                     chunk_analysis["original_content"] = chunk[:500] + "..."  # Truncated for logging
 
@@ -560,7 +586,17 @@ Analisis harus profesional, faktual, dan membantu keputusan investasi."""
 
                 response.raise_for_status()
                 result = response.json()
-                analysis_text = result["choices"][0]["message"]["content"].strip()
+
+                # Extract content with full structural validation
+                try:
+                    analysis_text = result["choices"][0]["message"]["content"].strip()
+                except (KeyError, IndexError, TypeError) as e:
+                    error_msg = result.get("error", {}).get("message", f"Invalid response structure: {e}")
+                    logger.error(f"API error for {announcement_data['ticker']} (status={response.status_code}): {error_msg}")
+                    logger.error(f"Full response: {result}")
+                    return self._error_response(
+                        announcement_data, f"API error: {error_msg}"
+                    )
 
                 self._track_request()
 
